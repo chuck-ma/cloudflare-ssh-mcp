@@ -2,6 +2,18 @@
 
 让 ChatGPT 网页端通过 SSH 执行自己 Windows 电脑上的命令。自定义服务代码只有一个 Cloudflare Worker；Windows 侧运行 OpenSSH Server 和 `cloudflared`，无需额外编写本机 MCP 网关或命令执行 Agent。
 
+## 为什么做这个项目
+
+最初想要的是类似 Remote Desktop Commander 的体验：直接在 ChatGPT 网页里，让 AI 帮自己操作电脑。但远程执行会接触命令、文件内容和终端输出，把这条链路交给中心化的远程执行服务，会让人担心隐私泄露和凭据托管问题。这是选择自行部署的动机，并非认定某个现有服务已经泄露数据。
+
+所以做了这个尽量免费、配置完成后用起来方便的方案：把 MCP Worker 部署到自己的 Cloudflare 账户，通过自己的 Tunnel 连接电脑，用 OAuth 登录授权，再由 SSH 执行命令。源码和配置方式公开，连接目标、SSH 密钥和访问策略由自己管理。
+
+另一个很实际的目的，就是“薅网页版额度”：复用自己 ChatGPT 网页版已有的模型额度，让网页里的 AI 调用自己的 SSH 工具，省去另外接入和支付模型 API 的步骤。本项目仍受 ChatGPT 账户本身的功能权限和使用额度限制；部署成本则以尽量落在 Cloudflare 免费配额内为目标，实际可用范围与费用以平台规则为准。
+
+这里的隐私收益是减少一个额外的远程执行服务商。ChatGPT/OpenAI 和 Cloudflare 仍参与处理链路，命令输出也会返回 ChatGPT，因此自行部署并不意味着所有数据都留在本机。
+
+## 架构
+
 ```mermaid
 flowchart LR
     C[ChatGPT / MCP 客户端] -->|HTTPS + OAuth| A[Cloudflare Access\nManaged OAuth]

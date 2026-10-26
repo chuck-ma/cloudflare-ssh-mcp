@@ -1,47 +1,28 @@
-# 实践中的故障与定位
+# 按错误定位
 
-## 公网 SSH WebSocket 返回 403 / Just a moment
+先记录失败阶段与脱敏错误，再选择对应行。只读检查应针对同一账户、Worker 版本、Tunnel 与用户；不要把另一个环境的成功当作证据。关键链路失败即停止该次验收，完成相关修复后再运行只读验收。
 
-早期验证通过公网 SSH 子域名建立 HTTP WebSocket。实际响应含 `cf-mitigated: challenge`，意味着 HTTP 层要求浏览器挑战，SSH 尚未建立。服务端 MCP 调用不能把这类 HTML 页面当作 SSH 字节流。
+| 实际症状 | 优先核对 | 修复范围与继续条件 |
+| --- | --- | --- |
+| 发布报权限不足或 10196 | 当前发布身份、账户、profile、VPC binding 权限 | 读 [发布权限](setup.md#5-wrangler-授权与首次部署)；解释具体缺项，在授权范围补齐后重试发布 |
+| deployments API 返回 No access to the specified resource | Worker scripts 权限，不只看 `workers:write` | 本次补齐 `workers_scripts:write` 后成功；不要因此更换目标账户或申请全部权限 |
+| `connect(...).then is not a function` | 是否为旧版源码/部署；运行时 binding 返回值 | 当前 `src/ssh.ts` 用 `Promise.resolve()` 兼容 Socket/Promise；有代码修改授权时修复旧版并发布，否则报告版本差异 |
+| TCP/SSH 超时或连接关闭 | Tunnel 在线、connector 目标与网络命名空间、QUIC/版本、出站 UDP 7844、回环 22 监听 | 读 [SSH](setup.md#1-核对-ssh-服务) 与 [Tunnel](setup.md#3-核对或配置-tunnel)；恢复同一私网目标可达后重做只读验收 |
+| 公钥认证失败 | `SSH_USER`、公私钥配对、实际 `AuthorizedKeysFile`/`Match`、文件权限 | 读 [专用密钥](setup.md#2-核对或配置专用密钥)；保留其他公钥，不以放开密码或目录权限替代修复 |
+| 主机指纹不匹配 | 可信管理入口中的 Ed25519 主机公钥是否更换 | 先解释差异；确认真实目标并获得相应授权后才更新 pin，不能直接跳过校验 |
+| OAuth 登录循环、401、回调失败或工具不可发现 | Access 主机范围、Managed OAuth、实际回调、邮箱策略、AUD/团队域名、`/mcp` URL | 读 [Access 配置](setup.md#6-配置-access-与-managed-oauth)；保留身份校验，修正同一应用配置后重新连接 |
+| grant 到期后要求登录 | OAuth grant 状态及生命周期 | 在现有授权范围内重新登录；不是 SSH 密钥过期，不因此生成新 SSH 密钥 |
+| 工具返回非零状态或输出不符 | 实际 exitStatus、远程默认 shell、当前命令的目录与参数 | 使用匹配语法；stderr 单独非空不判失败，截断检查 `truncated`，不自动重复修改类命令 |
+| 公网 SSH WebSocket 返回 403 / `cf-mitigated: challenge` | 是否仍在使用旧的公网 HTTP/WebSocket 路径 | 核对代码与 VPC binding；当前实现用私网 TCP，不通过关闭 Bot Fight/WAF 消除挑战 |
 
-最终实现改为 Worker 的 VPC Network 原始 TCP，直接进入目标主机的 Tunnel，再访问 `127.0.0.1:22`。已验证无需关闭站点 Bot Fight Mode。OAuth 仍保护公网 MCP 入口，SSH 仍使用专用密钥和主机指纹校验。不要为了这条链路直接关闭整个站点防护。
+## 区分凭据与协议层
 
-## 发布报权限不足 / 10196
+ChatGPT 持有 Managed OAuth token；Cloudflare 向 Worker 转发 `Cf-Access-Jwt-Assertion`，由 `src/auth.ts` 验证。Worker 的专用私钥另用于 SSH 登录。不要混用 OAuth bearer、Access 断言、Tunnel token 与 SSH 密钥。
 
-检查发布时使用的账户和授权 profile。VPC Tunnel binding 需要 `Connectivity Directory Admin`，只具备 Worker 发布权限时会被拒绝。
+OAuth discovery、注册和换 token 由边缘 Managed OAuth 提供，Worker 只实现 `/mcp`。没有合法 Access 断言的直接 Worker 请求会被拒绝；这种结果不能证明客户端 OAuth 配置成功或失败。
 
-本次实践中，仅授予 `workers:write` 又遇到 deployments API 的 `No access to the specified resource`；补齐 `workers_scripts:write` 后发布成功。复现用的完整 Wrangler OAuth scope 命令见 [搭建指南](setup.md#5-wrangler-授权与首次部署)。
+## 超时与重试
 
-用 `--profile ssh-mcp-vpc` 显式指定独立配置；不要以为新建 profile 后所有已有命令都会自动使用它。
+TCP 建连和 SSH 握手各有 15 秒超时；`timeout_seconds` 控制命令执行阶段，整次调用可能更久。每次调用是新会话，目录和环境不保留。
 
-## connect(...).then is not a function
-
-本次实际 Workers 运行时的 `SSH_VPC.connect()` 直接返回 Socket，而非 Promise。直接调用 `.then()` 会在进入 SSH 握手前失败。
-
-源码用 `Promise.resolve(env.SSH_VPC.connect(...))` 统一处理同步/异步返回。TypeScript 与打包都不能证明运行时 binding 的行为；修复后通过实际插件调用和 ChatGPT 网页端验证。
-
-## 私网连接超时或关闭
-
-依次检查目标 Tunnel 在线、connector 所在机器正确、cloudflared 版本和 QUIC、出站 UDP 7844，以及目标 SSH 服务正在监听 `127.0.0.1:22`。目标地址是 connector 自身的回环地址；如果 connector 跑在另一台机器上，就无法访问目标主机的回环 SSH。
-
-本项目将 TCP 建连与 SSH 握手超时分别设为 15 秒；工具的 `timeout_seconds` 控制命令执行阶段，因此整次工具调用可能比该参数更久。
-
-## SSH 公钥认证失败或主机指纹不匹配
-
-检查 `SSH_USER`、Worker Secret 的完整私钥，以及公钥是否进入该用户实际生效的 authorized-keys 文件。OpenSSH 的 `AuthorizedKeysFile` 与适用的 `Match` 规则可能改变文件位置，应检查有效配置。
-
-主机指纹不匹配时，先通过可信管理入口检查服务端的 Ed25519 主机公钥是否更换，再决定是否更新配置。不要关闭主机校验。
-
-## OAuth 登录循环、401 或重定向失败
-
-检查 Access 应用是否覆盖 MCP 主机名、Managed OAuth 是否开启、redirect URI 是否与 ChatGPT 实际地址匹配，以及邮箱策略、`OWNER_EMAIL`、`ACCESS_AUD`、团队域名是否一致。
-
-Worker 仅提供 `/mcp`，OAuth discovery/注册/换 token 由边缘 Managed OAuth 提供。直接绕过 Access 调用 Worker，或者缺少合法 `Cf-Access-Jwt-Assertion`，会被拒绝。
-
-短 access token 过期一般由 refresh token 续期；grant session 到期或撤销后需要重新登录。它不意味着 SSH 密钥过期。
-
-## 命令没有结果或返回非零状态
-
-先用 `whoami` 等只读命令验证。SSH 使用远程用户的默认 shell，命令语法须与之匹配；需要特定解释器时显式调用。工作目录不跨调用保留，需要在同一命令中切换目录再执行。
-
-不要看到 stderr 就判定失败，应读取 exitStatus。截断时查看 `truncated`。超时、断线或错误并不保证命令未执行，修改类操作应先通过只读查询确认状态，不要自动重试。
+超时、断线或客户端报错不能证明命令未执行。修改类操作先查远端状态；发布或创建资源的响应不明时先查资源状态。只有状态明确后才决定重试或继续，避免重复执行。

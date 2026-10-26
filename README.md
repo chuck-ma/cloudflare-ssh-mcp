@@ -54,37 +54,15 @@ MCP 工具名称：`ssh_exec`。返回示例（用户名为示意）：
 - `stderr` 非空不一定失败；根据 `exitStatus` 判断。
 - 超时或断连后不会自动重放命令，远程操作可能已经开始。修改类命令必须先检查实际状态再决定是否重试。
 
-## 开始搭建
+## 交给智能体部署
 
-准备 Node.js 22、npm、Cloudflare 账户、可使用自定义 MCP/OAuth 的 ChatGPT 账户，以及一台已配置 SSH 服务和 Tunnel 的主机。
+让智能体从 **[SKILL.md](SKILL.md)** 开始。该入口按任务引导加载部署流程或排障资料，明确输入、资源复用、权限范围和验收标准。
 
-```sh
-git clone https://github.com/h2562961224/cloudflare-ssh-mcp.git
-cd cloudflare-ssh-mcp
-npm ci --ignore-scripts
-cp wrangler.example.jsonc wrangler.local.jsonc
-npm run check
-```
+- [部署流程](docs/setup.md)：输入映射、分阶段操作与成功条件。
+- [排障表](docs/troubleshooting.md)：从真实错误定位下一步。
+- [配置模板](wrangler.example.jsonc)：实际部署值写入被 Git 忽略的 `wrangler.local.jsonc`。
 
-`check` 使用示例配置做 TypeScript 检查和部署打包预演，不会发布 Worker，也不会连接远程主机。填写本地配置、配置 OAuth、安装 SSH 公钥后再部署。完整操作见 **[搭建指南](docs/setup.md)**，故障定位见 **[排障指南](docs/troubleshooting.md)**。
-
-## 配置
-
-仅提交 `wrangler.example.jsonc`。实际部署读取被 Git 忽略的 `wrangler.local.jsonc`。
-
-| 配置项 | 含义 |
-| --- | --- |
-| `name` | 自己的 Worker 名称 |
-| `PUBLIC_ORIGIN` | Worker 的 HTTPS origin，无路径和末尾斜杠 |
-| `ACCESS_TEAM_DOMAIN` | Zero Trust 团队域名，不含 `https://` |
-| `ACCESS_AUD` | 保护 MCP 入口的 Access 应用 Audience |
-| `OWNER_EMAIL` | 唯一允许调用工具的用户邮箱 |
-| `SSH_USER` | SSH 登录用户 |
-| `SSH_HOST_KEY` | 经可信途径核对的 SSH Ed25519 主机指纹，格式 `SHA256:...` |
-| `vpc_networks[0].tunnel_id` | 目标主机所在 Tunnel 的 UUID |
-| Secret `SSH_PRIVATE_KEY` | 专门为此 Worker 生成的 OpenSSH Ed25519 私钥 |
-
-`ACCESS_AUD` 或 `OWNER_EMAIL` 未配置时拒绝所有 MCP 请求。目标固定为 Tunnel connector 所在机器的 `127.0.0.1:22`，工具参数不能指定其他主机或凭据。
+Node.js 22 与锁定依赖用于本地发布；目标端只需兼容的 SSH 服务和 Tunnel。部署流程会先核对已有资源，再完成所缺配置。
 
 ## 权限与边界
 
@@ -97,12 +75,13 @@ MCP 入口必须由仅本人可登录的 Access 策略保护。Worker 另外校�
 ## 源码结构
 
 ```text
+SKILL.md                     智能体执行入口
 src/index.ts                 MCP 工具注册、入口路由和错误返回
 src/auth.ts                  Access JWT 验证
 src/ssh.ts                   VPC TCP、SSH 主机校验和命令执行
 wrangler.example.jsonc       无个人信息的配置模板
-docs/setup.md                配置和部署步骤
-docs/troubleshooting.md      本次实践中的错误与定位方式
+docs/setup.md                输入、部署阶段和成功条件
+docs/troubleshooting.md      按错误选择排障路径
 ```
 
 ## 参考资料

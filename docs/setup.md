@@ -1,117 +1,142 @@
-# 从零配置到 ChatGPT 执行 whoami
+# 部署流程
 
-本指南对应单用户、单台 SSH 主机的部署。各产品界面可能更新，操作时以当前账户页面显示为准。操作系统负责运行 SSH 服务和 Tunnel，Worker 通过 SSH 协议访问目标。
+供智能体配置单用户、单台 SSH 主机。每阶段先检查已有状态，仅执行缺失的、已获授权的操作；成功条件未满足时保留当前状态，按具体错误处理。
 
-## 1. 准备 SSH 服务
+## 0. 核对输入与已有资源
 
-在目标主机安装并启动兼容的 SSH 服务，例如 OpenSSH Server。已有 SSH 服务时沿用现有配置，保留原来的密钥和访问策略。确认：
+优先从用户指定的本地配置、Cloudflare 账户与已有管理连接读取。无法确定账户或目标资源时再询问；不在多个账户间试写。
 
-- 目标用户可以使用 Ed25519 公钥登录。
-- SSH 服务提供 Ed25519 主机密钥；当前实现固定使用 `ssh-ed25519` 主机密钥算法。
-- SSH 监听范围包含 `127.0.0.1:22`，并与 `cloudflared` 处于同一网络命名空间。
-- 已确认远程用户的权限和默认 shell，准备好与该 shell 匹配的命令。
+| 输入 | 写入位置 / 核对方式 |
+| --- | --- |
+| Cloudflare 账户、发布凭据/profile | 多账户时在本地配置显式设置 `account_id`；确认当前身份有目标账户权限 |
+| Worker 名称及 HTTPS origin | `name`、`PUBLIC_ORIGIN`；origin 无路径、无末尾斜杠 |
+| Zero Trust 团队域名与本人邮箱 | `ACCESS_TEAM_DOMAIN` 不含 `https://`；`OWNER_EMAIL` 与 Access 策略一致 |
+| 目标 Tunnel UUID 与 connector | `vpc_networks[0].tunnel_id`；connector 与 SSH 服务处于同一网络命名空间 |
+| SSH 登录用户与可信 Ed25519 主机指纹 | `SSH_USER`、`SSH_HOST_KEY`，后者格式为 `SHA256:...` |
+| 专用 SSH 密钥状态与现有管理途径 | 仅需知道存放位置、公钥指纹与是否已安装，不把私钥放进上下文 |
+| MCP Access 应用及 Audience | `ACCESS_AUD`；尚未创建时在第 6 阶段取得 |
+| 客户端与回调地址 | 本项目目标入口为 ChatGPT；回调以实际连接页面为准 |
 
-通过可信管理连接查看 SSH 服务端的 Ed25519 主机公钥指纹，例如：
+**成功条件：** 目标账户、主机、用户和允许修改的资源已明确；已有匹配资源可复用。缺少私网 SSH 访问条件时，先处理第 1–3 阶段，不以公网暴露替代。
+
+## 1. 核对 SSH 服务
+
+确认目标服务已启动、允许指定用户使用 Ed25519 公钥登录、提供 `ssh-ed25519` 主机密钥，监听范围包含 connector 所在网络命名空间的 `127.0.0.1:22`。记录该用户默认 shell，后续命令使用相应语法。
+
+通过已有可信管理途径核对主机公钥指纹，例如：
 
 ```sh
 ssh-keygen -lf /path/to/ssh_host_ed25519_key.pub -E sha256
 ```
 
-这里的路径需要替换成服务端实际的主机公钥文件。核对后将指纹填入 `SSH_HOST_KEY`。本次验证部署仅监听回环地址，采用公钥认证并限制允许登录的用户；修改已有服务时，应先确认不会影响原来的管理入口。
+路径按目标服务实际配置替换。修改或安装 SSH 服务仅限用户授权范围，保留既有管理入口。本次来源部署只监听回环地址；这是部署选择，不应机械覆盖其他主机的监听配置。
 
-## 2. 准备专用 SSH 密钥
+**成功条件：** 目标监听与算法满足当前源码约束，`SSH_USER` 和 `SSH_HOST_KEY` 已确定。指纹不符或来源不可信时，停止 SSH 验证并查明原因。
 
-在可信管理电脑生成专门供 Worker 使用的 Ed25519 密钥；不要上传自己的日常管理私钥。以下为本地 shell 示例，密钥保存在仓库之外：
+## 2. 核对或配置专用密钥
+
+优先复用明确属于本项目的专用密钥；不要替换为用户日常管理私钥。需要新建且已获授权时，选择仓库之外的未使用路径，例如本地 shell：
 
 ```sh
 mkdir -p ../cloudflare-ssh-mcp-secrets
 ssh-keygen -t ed25519 -f ../cloudflare-ssh-mcp-secrets/id_ed25519 -N '' -C cloudflare-ssh-mcp
 ```
 
-把 `.pub` 公钥通过已有管理连接追加到目标用户实际生效的 authorized-keys 文件，保留原有公钥。OpenSSH 常用用户目录中的 `.ssh/authorized_keys`，具体位置由 `sshd_config` 的 `AuthorizedKeysFile` 与适用的 `Match` 规则决定。
+若文件已存在，检查身份和用途，不能覆盖。当前实现读取未加口令的 OpenSSH 私钥。
 
-按 SSH 服务端要求设置文件所有者和访问权限。认证失败时，应先核对有效配置、目标用户与文件权限。
+通过已有管理连接检查目标用户实际生效的 authorized-keys 文件。OpenSSH 常用 `.ssh/authorized_keys`，但 `AuthorizedKeysFile` 与适用的 `Match` 规则可能改变位置。按公钥内容检查是否存在，缺失时追加，保留原有条目与正确的所有者/权限。
 
-Worker 读取未加口令的私钥，其副本必须妥善保存。本项目不实现私钥口令交互。
+**成功条件：** 同一专用公钥只安装一次；知道私钥的受保护存放位置；主机校验与用户认证分别核对。
 
-## 3. 准备 Tunnel
+## 3. 核对或配置 Tunnel
 
-在 Cloudflare 创建或复用目标主机上的 Tunnel，记录 UUID，填入 `vpc_networks[0].tunnel_id`。同一 Tunnel 的多个 connector 应具有一致的目标语义；此项目使用回环地址，因此应确认请求实际会落到目标 SSH 主机。
+复用指向目标主机的 Tunnel，并读取 UUID 和 connector 状态。VPC 要求 `cloudflared` 至少 `2025.7.0`、使用 QUIC、允许出站 UDP 7844；详情见 [官方 Tunnel 要求](https://developers.cloudflare.com/workers-vpc/configuration/tunnel/)。确需新建时使用控制台提供的安装方式，不展示包含 Tunnel token 的完整命令。
 
-目标主机的 `cloudflared` 应作为持续运行的服务保持在线。VPC 要求版本至少 `2025.7.0`、使用 QUIC，并允许出站 UDP 7844。已有兼容 Tunnel 可直接复用。安装与连接参数使用控制台提供的命令，Tunnel token 不写入仓库。详见 [Workers VPC 的 Tunnel 配置](https://developers.cloudflare.com/workers-vpc/configuration/tunnel/)。
+本项目使用 **VPC Network** 直接绑定 Tunnel，不使用面向公网的 SSH HTTP/WebSocket 路由。connector 必须与目标 SSH 处于同一网络命名空间；同一 Tunnel 有多个 connector 时，每个可能接收请求的实例都必须满足目标条件。
 
-这里使用 **VPC Network** 直接绑定 Tunnel，并连接其 `127.0.0.1:22`。不需要为这条 Worker → SSH 链路新建公网 SSH 子域名或 HTTP/WebSocket ingress；也不需要新增供它使用的 Linked App Token 策略。已有交互式 SSH 的域名和策略可以独立保留。
+**成功条件：** 选定 Tunnel 在线、connector 目标正确且满足 VPC 要求。若 connector 位于另一台主机/隔离容器，不能假设其 `127.0.0.1` 指向 SSH 主机。
 
-## 4. 安装依赖并填写配置
+## 4. 准备本地配置
 
 ```sh
 npm ci --ignore-scripts
-cp wrangler.example.jsonc wrangler.local.jsonc
 ```
 
-填写 README 配置表中的值。多 Cloudflare 账户时，可在 `wrangler.local.jsonc` 增加 `account_id` 以明确目标账户。Worker 名称改变后，`PUBLIC_ORIGIN` 必须同步更新。
+仅在 `wrangler.local.jsonc` 不存在时从 `wrangler.example.jsonc` 复制；存在时读取并核对，按需要合并字段，不覆盖已有部署值。填写第 0 阶段映射的非秘密参数。私钥不放入 `vars`。
 
-先为 `OWNER_EMAIL` 填写本人邮箱。Access 应用建立前可以保留空 `ACCESS_AUD`；此时所有 MCP 请求都会被拒绝。首次部署可用于取得 Worker 地址，再建立 Access 应用，填写 AUD 后重新部署。
+首次创建 Access 应用前，允许暂留空 `ACCESS_AUD`；`src/auth.ts` 在 AUD 或邮箱为空时拒绝所有 MCP 请求。更新已有部署时，保留已核对的 AUD，避免不必要的中断。
+
+```sh
+npm run check
+npx wrangler deploy --dry-run --config wrangler.local.jsonc
+```
+
+`check` 只检查示例配置和类型；第二条命令检查实际本地配置能否打包。两者都不证明账户权限、Tunnel 可达或 OAuth 正确。
+
+**成功条件：** 本地配置与目标资源一致、无模板占位值（新部署的空 AUD 除外）、打包成功；敏感文件不进入提交。
 
 ## 5. Wrangler 授权与首次部署
 
-仓库固定 Wrangler `4.151.2`，使用 `npx wrangler` 避免系统全局版本干扰。创建独立发布授权配置：
+读取现有发布身份与权限，足够时复用。仓库固定 Wrangler `4.151.2`，使用本地 `npx wrangler`。以下是本次验证过的独立 OAuth profile 示例；profile 名称可替换，已有可用凭据无需重复授权：
 
 ```sh
 npx wrangler auth create ssh-mcp-vpc --scopes account:read user:read workers:write workers_scripts:write connectivity:admin
 ```
 
-完成浏览器授权后：
+直接绑定 Tunnel 需要 `Connectivity Directory Admin`。本次仅有 `workers:write` 时 deployments API 拒绝访问，加入 `workers_scripts:write` 后成功。这些是发布端权限，不交给 ChatGPT；OAuth scopes 与 API token 权限名不可直接互换。权限不足时说明具体缺项，遵循用户授权和所用工具的确认要求。
 
 ```sh
-npm run check
 npm run deploy -- --profile ssh-mcp-vpc
 ```
 
-本次实践中 `workers:write` 单独不足以访问 Worker deployments API，加入 `workers_scripts:write` 后发布成功。直接绑定 Tunnel 的 VPC Network 还需要 `connectivity:admin`。这些是部署端的权限，不交给 ChatGPT；VPC 管理权限作用于账户资源，并非只针对一个 Worker。
+profile 参数使用实际选定名称。首次发布可先保留空 AUD 以取得 Worker 地址；已有 Worker 直接继续配置核对，按需要发布，不为同名部署再建一个 Worker。
 
-若采用自己管理的 API token，请按对应产品权限配置；不要把 Wrangler OAuth scope 名称当作 API token 权限名直接照填。
+**成功条件：** 目标账户中的 Worker 已存在；发布时有明确版本结果且实际 binding 为目标 `SSH_VPC` Tunnel。新建情况下确认其 origin 并回填 `PUBLIC_ORIGIN`；此时仍未完成端到端验收。
 
-## 6. 为 MCP 入口配置 Access 与 Managed OAuth
+## 6. 配置 Access 与 Managed OAuth
 
-在 Zero Trust 的 Access Applications 为 Worker 建立 MCP server 应用，并绑定它实际使用的主机名。策略仅允许本人邮箱登录；不要使用 Everyone/Bypass。若使用 Worker preview URL，也要保护或关闭该入口。
+读取覆盖 MCP 主机名的 Access 应用，匹配时复用；缺失时在授权范围内创建 MCP server 应用。策略仅允许 `OWNER_EMAIL` 对应身份，保护实际使用的生产/预览入口。保留不属于本项目的应用与策略。
 
-在 Advanced settings 开启 Managed OAuth，启用所需客户端动态注册并限制 redirect URI：
+开启 Managed OAuth，配置所需动态客户端注册和 ChatGPT 回调 allowlist。以客户端显示的准确 URI 为准；本次曾使用以下形式，并非要求每个环境同时添加：
 
-- 以 ChatGPT 应用管理页面显示的准确回调地址为准。
-- 本次配置使用过 `https://chatgpt.com/connector_platform_oauth_redirect` 及 `https://chatgpt.com/connector/oauth/*`；新连接应按实际回调需要选择，不要无条件开放整个站点。
-- 仅供网页端使用时，无需允许任意 localhost / loopback 客户端。
+```text
+https://chatgpt.com/connector_platform_oauth_redirect
+https://chatgpt.com/connector/oauth/*
+```
 
-本次部署采用 15 分钟 access token 和 1 个月 grant session。有效 grant 内可以刷新 access token，grant 到期或被撤销后需要重新登录。这与 SSH 密钥独立，不是每月重新生成 SSH 密钥。设置含义见 [Managed OAuth 官方说明](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)；ChatGPT 身份验证要求见 [OpenAI 官方说明](https://developers.openai.com/plugins/build/auth)。
+网页端流程无需任意 localhost/loopback 客户端许可。grant session 和 access token 生命周期按当前用户选择配置；15 分钟 access token、1 个月 grant 是本次部署实例，不是实现要求。grant 有效时可刷新 token，到期或撤销后需重新登录，与 SSH 密钥周期独立。
 
-复制该 Access 应用的 Audience 到 `ACCESS_AUD`，确认 `ACCESS_TEAM_DOMAIN` 正确。Cloudflare 将客户端 OAuth token 解析为用户身份，并向 Worker 注入 `Cf-Access-Jwt-Assertion`；本项目验证这份 JWT，不把 OAuth bearer token 当作 SSH 凭据。
+将实际应用 Audience 填入 `ACCESS_AUD`。客户端提交 OAuth token，Cloudflare 向 Worker 注入签名的 `Cf-Access-Jwt-Assertion`；Worker 校验这份断言。OAuth discovery、注册和换 token 由边缘提供，Worker 只实现 `/mcp`。
 
-## 7. 上传专用私钥并发布最终配置
+**成功条件：** 读取已保存的应用确认主机、策略、Managed OAuth、回调与 AUD 一致，本地配置指向该应用。界面或客户端规则有变化时查 [Cloudflare Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/) 与 [OpenAI 身份验证文档](https://developers.openai.com/plugins/build/auth)，不要盲目扩大回调匹配范围。
+
+## 7. Secret 与最终发布
+
+先检查 Worker 是否已有 `SSH_PRIVATE_KEY` 及其来源记录。已确认与第 2 阶段公钥配对时保留；来源不明时不能根据 secret 名称断定已配对。需要安装或更换时，经用户授权，使用受保护文件/输入通道上传专用私钥：
 
 ```sh
 npm run secret:ssh -- --profile ssh-mcp-vpc
-```
-
-在终端的 secret 输入提示中粘贴第 2 步专用私钥的完整内容，保留 OpenSSH 头尾与换行。不要把私钥放进 `vars`、README、提交或聊天消息。然后发布最终配置：
-
-```sh
 npm run deploy -- --profile ssh-mcp-vpc
 ```
 
-## 8. 接入 ChatGPT 并验收
+替换为实际 profile。保持 OpenSSH 私钥头尾与换行，不回显或输出 secret 值。若怀疑已泄露，报告并按授权撤销/更换，不把它作为普通连接错误重试。
 
-在有自定义 MCP 权限的 ChatGPT 账户中，进入应用/插件管理的自定义 MCP 创建入口（部分账户需先开启开发者模式），配置：
+**成功条件：** 所需 secret 已配置，最终部署包含正确的非空 AUD、邮箱、origin、主机指纹与 VPC binding，并已记录部署版本。
 
-- 名称：例如 Cloudflare SSH。
-- MCP URL：`https://<自己的 Worker 主机名>/mcp`。
-- 认证：OAuth，通过 Managed OAuth discovery/动态注册连接。
+## 8. 从指定客户端验收
 
-完成本人身份登录，确认能发现 `ssh_exec`。具体账户是否提供入口及权限以当前 ChatGPT 界面为准。然后在启用该工具的对话中输入：
+复用已有且匹配的 ChatGPT 自定义 MCP 应用。缺失时在账户有权限的创建入口配置名称（如 Cloudflare SSH）、`https://<自己的 Worker 主机名>/mcp` 与 OAuth；完成本人登录并确认发现 `ssh_exec`。
 
-> 调用 Cloudflare SSH 的 ssh_exec，仅执行 whoami，timeout_seconds=15，展示实际 stdout、stderr、exitStatus，不执行其他命令。
+从 ChatGPT 网页端调用：
 
-验收应得到实际远程登录用户、`exitStatus: 0`。TypeScript 通过、打包成功或 Worker 已部署，都不等于这条链路已打通。若关键链路失败，按 [排障指南](troubleshooting.md) 定位后重新验收。
+```json
+{"command":"whoami","timeout_seconds":15}
+```
 
-## 撤销
+**通过条件：** 这次真实工具调用返回预期远程账户、`exitStatus: 0`，并记录实际 stdout、stderr。预期账户来自第 0 阶段，不能只看返回了任意字符串。stderr 单独非空不决定成败。
 
-移除目标主机上该项目专用公钥，可以撤销其 SSH 登录。移除 Worker 的 `SSH_VPC` binding，可以停止其 Tunnel 网络访问。禁用 MCP Access 应用或本人策略，可以停止客户端调用；撤销 OAuth grant 可要求客户端重新登录。日常交互式 SSH 的配置独立管理。
+认证、工具发现、连接或命令失败均使该次验收失败；不可达则报告未验收。转入 [排障表](troubleshooting.md)，修复相关问题后重新执行只读验收。不得以直连 SSH、其他 MCP 客户端或历史部署结果替代用户指定入口。
+
+## 按需撤销
+
+仅撤销用户指定的资源：移除本项目专用公钥可停止该密钥登录；移除 Worker 的 `SSH_VPC` binding 可停止其 Tunnel 访问；禁用本项目 Access 应用/策略可停止客户端接入；撤销 OAuth grant 可要求重新登录。复用的 Tunnel 或日常管理凭据不能随项目撤销而直接删除。

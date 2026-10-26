@@ -4,7 +4,7 @@
 
 早期验证通过公网 SSH 子域名建立 HTTP WebSocket。实际响应含 `cf-mitigated: challenge`，意味着 HTTP 层要求浏览器挑战，SSH 尚未建立。服务端 MCP 调用不能把这类 HTML 页面当作 SSH 字节流。
 
-最终实现改为 Worker 的 VPC Network 原始 TCP，直接进入 Windows Tunnel，再访问 `127.0.0.1:22`。已验证无需关闭站点 Bot Fight Mode。OAuth 仍保护公网 MCP 入口，SSH 仍使用专用密钥和主机指纹校验。不要为了这条链路直接关闭整个站点防护。
+最终实现改为 Worker 的 VPC Network 原始 TCP，直接进入目标主机的 Tunnel，再访问 `127.0.0.1:22`。已验证无需关闭站点 Bot Fight Mode。OAuth 仍保护公网 MCP 入口，SSH 仍使用专用密钥和主机指纹校验。不要为了这条链路直接关闭整个站点防护。
 
 ## 发布报权限不足 / 10196
 
@@ -22,15 +22,15 @@
 
 ## 私网连接超时或关闭
 
-依次检查目标 Tunnel 在线、connector 所在机器正确、cloudflared 版本和 QUIC、出站 UDP 7844，以及 Windows sshd 正在监听 `127.0.0.1:22`。目标地址是 connector 自身的回环地址；如果 connector 跑在另一台机器上，就无法访问 Windows 的回环 SSH。
+依次检查目标 Tunnel 在线、connector 所在机器正确、cloudflared 版本和 QUIC、出站 UDP 7844，以及目标 SSH 服务正在监听 `127.0.0.1:22`。目标地址是 connector 自身的回环地址；如果 connector 跑在另一台机器上，就无法访问目标主机的回环 SSH。
 
 本项目将 TCP 建连与 SSH 握手超时分别设为 15 秒；工具的 `timeout_seconds` 控制命令执行阶段，因此整次工具调用可能比该参数更久。
 
 ## SSH 公钥认证失败或主机指纹不匹配
 
-检查 `SSH_USER`、Worker Secret 的完整私钥，以及公钥是否进入该用户实际生效的 authorized-keys 文件。管理员用户常受 sshd 的 `Match Group administrators` 规则影响，不能只检查用户目录的 `.ssh/authorized_keys`。
+检查 `SSH_USER`、Worker Secret 的完整私钥，以及公钥是否进入该用户实际生效的 authorized-keys 文件。OpenSSH 的 `AuthorizedKeysFile` 与适用的 `Match` 规则可能改变文件位置，应检查有效配置。
 
-主机指纹不匹配时，先通过可信管理入口检查 Windows 的 Ed25519 主机公钥是否更换，再决定是否更新配置。不要关闭主机校验。
+主机指纹不匹配时，先通过可信管理入口检查服务端的 Ed25519 主机公钥是否更换，再决定是否更新配置。不要关闭主机校验。
 
 ## OAuth 登录循环、401 或重定向失败
 
@@ -38,10 +38,10 @@
 
 Worker 仅提供 `/mcp`，OAuth discovery/注册/换 token 由边缘 Managed OAuth 提供。直接绕过 Access 调用 Worker，或者缺少合法 `Cf-Access-Jwt-Assertion`，会被拒绝。
 
-短 access token 过期一般由 refresh token 续期；grant session 到期或撤销后需要重新登录。它不意味着 Windows SSH 密钥过期。
+短 access token 过期一般由 refresh token 续期；grant session 到期或撤销后需要重新登录。它不意味着 SSH 密钥过期。
 
 ## 命令没有结果或返回非零状态
 
-默认 shell 不一定是 PowerShell，先用 `whoami` 验证。PowerShell 命令需要显式调用解释器。工作目录不跨调用保留，需要在同一命令中切换目录再执行。
+先用 `whoami` 等只读命令验证。SSH 使用远程用户的默认 shell，命令语法须与之匹配；需要特定解释器时显式调用。工作目录不跨调用保留，需要在同一命令中切换目录再执行。
 
 不要看到 stderr 就判定失败，应读取 exitStatus。截断时查看 `truncated`。超时、断线或错误并不保证命令未执行，修改类操作应先通过只读查询确认状态，不要自动重试。

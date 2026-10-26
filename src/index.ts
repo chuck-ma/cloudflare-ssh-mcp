@@ -7,12 +7,12 @@ import { execute, type SshConfig } from './ssh';
 interface Env extends AccessConfig, SshConfig {}
 
 function createServer(env: Env) {
-  const server = new McpServer({ name: 'windows-ssh', version: '0.1.0' });
+  const server = new McpServer({ name: 'cloudflare-ssh', version: '0.1.0' });
   server.registerTool('ssh_exec', {
-    title: 'Execute a command on Windows over SSH',
-    description: 'Execute one command on the owner\'s configured Windows computer as the configured SSH user. The target and credentials are server-side. The command uses the SSH server\'s default shell; explicitly invoke powershell -NoProfile -Command when PowerShell syntax is needed. Each call starts a new session: working directory and environment do not persist. Commands must finish within 25 seconds. Do not automatically retry a timed-out or disconnected command: execution may already have happened. Returns stdout, stderr and exitStatus; nonempty stderr alone does not imply failure.',
+    title: 'Execute a command on a remote host over SSH',
+    description: 'Execute one command on the owner\'s configured remote host as the configured SSH user. The target and credentials are server-side. The command uses the remote user\'s configured default shell; match its syntax or explicitly invoke the required interpreter. Each call starts a new session: working directory and environment do not persist. Commands must finish within 25 seconds. Do not automatically retry a timed-out or disconnected command: execution may already have happened. Returns stdout, stderr and exitStatus; nonempty stderr alone does not imply failure.',
     inputSchema: z.object({
-      command: z.string().min(1).max(8192).describe('A command in the Windows SSH default shell'),
+      command: z.string().min(1).max(8192).describe('A command in the remote SSH user’s default shell'),
       timeout_seconds: z.number().int().min(1).max(25).default(15),
     }),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },

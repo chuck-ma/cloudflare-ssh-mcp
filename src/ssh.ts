@@ -42,7 +42,7 @@ export async function execute(env: SshConfig, command: string, timeoutSeconds: n
   if (!env.SSH_PRIVATE_KEY || !env.SSH_VPC) {
     throw new Error('SSH private key or VPC binding is missing');
   }
-  // Target is fixed at the Windows Tunnel connector's loopback SSH listener.
+  // Target is fixed at the Tunnel connector's loopback SSH listener.
   // No public hostname, HTTP request, or automatic replay is used.
   const socket = await openPrivateSocket(env);
   try {

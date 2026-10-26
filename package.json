@@ -19,5 +19,5 @@
     "typescript": "6.0.3",
     "wrangler": "4.151.2"
   },
-  "description": "A Cloudflare Worker MCP server connecting ChatGPT to Windows SSH over Workers VPC."
+  "description": "Connect ChatGPT to your SSH hosts through Cloudflare Managed OAuth, Workers VPC and Tunnel."
 }

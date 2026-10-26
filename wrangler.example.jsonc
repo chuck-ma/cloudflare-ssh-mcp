@@ -16,7 +16,7 @@
     "PUBLIC_ORIGIN": "https://cloudflare-ssh-mcp.YOUR-SUBDOMAIN.workers.dev",
     "ACCESS_TEAM_DOMAIN": "YOUR-TEAM.cloudflareaccess.com",
     "OWNER_EMAIL": "",
-    "SSH_USER": "YOUR_WINDOWS_USER",
+    "SSH_USER": "YOUR_SSH_USER",
     "SSH_HOST_KEY": "SHA256:REPLACE_WITH_VERIFIED_HOST_FINGERPRINT",
     "ACCESS_AUD": ""
   },

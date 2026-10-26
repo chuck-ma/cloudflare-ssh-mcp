@@ -1,46 +1,44 @@
 # 从零配置到 ChatGPT 执行 whoami
 
-本指南对应单用户、单台 Windows 的实现。各产品界面可能更新，操作时以当前账户页面显示为准。仓库不自动改动 Windows、Access 策略或 Tunnel。
+本指南对应单用户、单台 SSH 主机的部署。各产品界面可能更新，操作时以当前账户页面显示为准。操作系统负责运行 SSH 服务和 Tunnel，Worker 通过 SSH 协议访问目标。
 
-## 1. 准备 Windows OpenSSH
+## 1. 准备 SSH 服务
 
-Windows 上安装并启动 OpenSSH Server。已有 SSH 服务时沿用现有配置，不要覆盖原来的密钥和访问策略。相关官方操作见 [Microsoft OpenSSH 安装指南](https://learn.microsoft.com/windows-server/administration/openssh/openssh_install_firstuse)。
+在目标主机安装并启动兼容的 SSH 服务，例如 OpenSSH Server。已有 SSH 服务时沿用现有配置，保留原来的密钥和访问策略。确认：
 
-以管理员身份检查：
+- 目标用户可以使用 Ed25519 公钥登录。
+- SSH 服务提供 Ed25519 主机密钥；当前实现固定使用 `ssh-ed25519` 主机密钥算法。
+- SSH 监听范围包含 `127.0.0.1:22`，并与 `cloudflared` 处于同一网络命名空间。
+- 已确认远程用户的权限和默认 shell，准备好与该 shell 匹配的命令。
 
-```powershell
-Get-Service sshd
-Get-Content "$env:ProgramData\ssh\sshd_config"
-ssh-keygen -lf "$env:ProgramData\ssh\ssh_host_ed25519_key.pub" -E sha256
+通过可信管理连接查看 SSH 服务端的 Ed25519 主机公钥指纹，例如：
+
+```sh
+ssh-keygen -lf /path/to/ssh_host_ed25519_key.pub -E sha256
 ```
 
-记录并通过可信管理连接核对 Ed25519 主机指纹，填入 `SSH_HOST_KEY`。不要通过关闭主机校验解决连接问题。
-
-本实现连接 `127.0.0.1:22`，确保 sshd 监听这个地址或包含该地址的监听范围。本次验证环境的 sshd 仅监听回环地址，采用公钥认证、禁用密码认证，并限制允许登录的用户。若修改已有 sshd，先确认不会影响现有管理入口。
+这里的路径需要替换成服务端实际的主机公钥文件。核对后将指纹填入 `SSH_HOST_KEY`。本次验证部署仅监听回环地址，采用公钥认证并限制允许登录的用户；修改已有服务时，应先确认不会影响原来的管理入口。
 
 ## 2. 准备专用 SSH 密钥
 
-在可信管理电脑生成专门供 Worker 使用的 Ed25519 密钥；不要上传自己的日常管理私钥。以下为 macOS/Linux 示例，密钥保存在仓库之外：
+在可信管理电脑生成专门供 Worker 使用的 Ed25519 密钥；不要上传自己的日常管理私钥。以下为本地 shell 示例，密钥保存在仓库之外：
 
 ```sh
 mkdir -p ../cloudflare-ssh-mcp-secrets
 ssh-keygen -t ed25519 -f ../cloudflare-ssh-mcp-secrets/id_ed25519 -N '' -C cloudflare-ssh-mcp
 ```
 
-把 `.pub` 公钥通过已有管理连接追加到 Windows 实际使用的 authorized-keys 文件，保留原有公钥。常见位置：
+把 `.pub` 公钥通过已有管理连接追加到目标用户实际生效的 authorized-keys 文件，保留原有公钥。OpenSSH 常用用户目录中的 `.ssh/authorized_keys`，具体位置由 `sshd_config` 的 `AuthorizedKeysFile` 与适用的 `Match` 规则决定。
 
-- 普通用户：用户目录下的 `.ssh/authorized_keys`。
-- `sshd_config` 含 `Match Group administrators` 的管理员用户：通常为 `C:\ProgramData\ssh\administrators_authorized_keys`。
-
-以实际 sshd 配置为准。管理员公钥文件应仅允许 SYSTEM 与 Administrators 等 sshd 要求的主体访问；不要通过放宽整个目录权限解决认证失败。参阅 [Microsoft OpenSSH 密钥管理](https://learn.microsoft.com/windows-server/administration/openssh/openssh_keymanagement)。
+按 SSH 服务端要求设置文件所有者和访问权限。认证失败时，应先核对有效配置、目标用户与文件权限。
 
 Worker 读取未加口令的私钥，其副本必须妥善保存。本项目不实现私钥口令交互。
 
-## 3. 准备 Windows Tunnel
+## 3. 准备 Tunnel
 
-在 Cloudflare 创建或复用 Windows 上的 Tunnel，记录 UUID，填入 `vpc_networks[0].tunnel_id`。同一 Tunnel 的多个 connector 应具有一致的目标语义；此项目使用回环地址，因此应确认请求实际会落到目标 Windows 电脑。
+在 Cloudflare 创建或复用目标主机上的 Tunnel，记录 UUID，填入 `vpc_networks[0].tunnel_id`。同一 Tunnel 的多个 connector 应具有一致的目标语义；此项目使用回环地址，因此应确认请求实际会落到目标 SSH 主机。
 
-Windows 的 `cloudflared` 应作为持续运行的服务保持在线。VPC 要求版本至少 `2025.7.0`、使用 QUIC，并允许出站 UDP 7844。已有兼容 Tunnel 可直接复用。安装与连接参数使用控制台提供的命令，Tunnel token 不写入仓库。详见 [Workers VPC 的 Tunnel 配置](https://developers.cloudflare.com/workers-vpc/configuration/tunnel/)。
+目标主机的 `cloudflared` 应作为持续运行的服务保持在线。VPC 要求版本至少 `2025.7.0`、使用 QUIC，并允许出站 UDP 7844。已有兼容 Tunnel 可直接复用。安装与连接参数使用控制台提供的命令，Tunnel token 不写入仓库。详见 [Workers VPC 的 Tunnel 配置](https://developers.cloudflare.com/workers-vpc/configuration/tunnel/)。
 
 这里使用 **VPC Network** 直接绑定 Tunnel，并连接其 `127.0.0.1:22`。不需要为这条 Worker → SSH 链路新建公网 SSH 子域名或 HTTP/WebSocket ingress；也不需要新增供它使用的 Linked App Token 策略。已有交互式 SSH 的域名和策略可以独立保留。
 
@@ -104,16 +102,16 @@ npm run deploy -- --profile ssh-mcp-vpc
 
 在有自定义 MCP 权限的 ChatGPT 账户中，进入应用/插件管理的自定义 MCP 创建入口（部分账户需先开启开发者模式），配置：
 
-- 名称：例如 Windows SSH。
+- 名称：例如 Cloudflare SSH。
 - MCP URL：`https://<自己的 Worker 主机名>/mcp`。
 - 认证：OAuth，通过 Managed OAuth discovery/动态注册连接。
 
 完成本人身份登录，确认能发现 `ssh_exec`。具体账户是否提供入口及权限以当前 ChatGPT 界面为准。然后在启用该工具的对话中输入：
 
-> 调用 Windows SSH 的 ssh_exec，仅执行 whoami，timeout_seconds=15，展示实际 stdout、stderr、exitStatus，不执行其他命令。
+> 调用 Cloudflare SSH 的 ssh_exec，仅执行 whoami，timeout_seconds=15，展示实际 stdout、stderr、exitStatus，不执行其他命令。
 
-验收应得到实际 Windows 用户、`exitStatus: 0`。TypeScript 通过、打包成功或 Worker 已部署，都不等于这条链路已打通。若关键链路失败，按 [排障指南](troubleshooting.md) 定位后重新验收。
+验收应得到实际远程登录用户、`exitStatus: 0`。TypeScript 通过、打包成功或 Worker 已部署，都不等于这条链路已打通。若关键链路失败，按 [排障指南](troubleshooting.md) 定位后重新验收。
 
 ## 撤销
 
-移除 Windows 上该项目专用公钥，可以撤销其 SSH 登录。移除 Worker 的 `SSH_VPC` binding，可以停止其 Tunnel 网络访问。禁用 MCP Access 应用或本人策略，可以停止客户端调用；撤销 OAuth grant 可要求客户端重新登录。日常交互式 SSH 的配置独立管理。
+移除目标主机上该项目专用公钥，可以撤销其 SSH 登录。移除 Worker 的 `SSH_VPC` binding，可以停止其 Tunnel 网络访问。禁用 MCP Access 应用或本人策略，可以停止客户端调用；撤销 OAuth grant 可要求客户端重新登录。日常交互式 SSH 的配置独立管理。

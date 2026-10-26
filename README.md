@@ -1,6 +1,6 @@
 # Cloudflare SSH MCP
 
-通过 Cloudflare Workers 将 ChatGPT 与自己的 SSH 主机连接起来。使用 Managed OAuth 管理身份授权，以 Workers VPC 和 Tunnel 建立私网连接，让 AI 在对话中调用远程命令。
+将私有 SSH 主机接入 MCP。使用 Cloudflare Managed OAuth 管理身份授权，以 Workers VPC 和 Tunnel 建立私网连接，为 MCP 客户端和智能体提供远程命令执行工具。
 
 项目基于标准 SSH 协议，不绑定特定操作系统。服务端代码运行在一个 Worker 中，目标主机提供 SSH 服务并运行 `cloudflared`。
 
@@ -8,15 +8,15 @@
 
 Remote Desktop Commander 一类工具展示了在 AI 对话中操作远程环境的便利性。对于需要接触本地文件、终端输出和登录凭据的场景，我们希望进一步掌握连接链路与访问权限，减少对额外中心化远程执行服务的依赖。
 
-Cloudflare SSH MCP 因此选择自行部署：Worker、Tunnel、访问策略和 SSH 密钥均由使用者在自己的账户与设备中管理，源码与配置方式公开。同时，直接复用 ChatGPT 网页版已有的交互入口和模型额度，无需另行接入模型 API。
+Cloudflare SSH MCP 因此选择自行部署：Worker、Tunnel、访问策略和 SSH 密钥均由使用者在自己的账户与设备中管理，源码与配置方式公开。客户端与模型由使用者选择，服务端专注于身份校验、私网连接和 SSH 执行。
 
-项目以轻量部署、便捷使用和尽量利用 Cloudflare 免费配额为目标。实际可用功能、额度与费用取决于相关平台规则。ChatGPT/OpenAI 与 Cloudflare 仍参与请求处理，自行部署的价值在于减少中间服务并掌握配置，而非让所有数据留在本机。
+项目以轻量部署、便捷使用和尽量利用 Cloudflare 免费配额为目标。实际可用功能、额度与费用取决于相关平台规则。Cloudflare 和所选客户端及其服务商仍参与请求处理，自行部署可以减少中间服务并让使用者掌握配置。
 
 ## 架构
 
 ```mermaid
 flowchart LR
-    C[ChatGPT / MCP 客户端] -->|HTTPS + OAuth| A[Cloudflare Access\nManaged OAuth]
+    C[MCP 客户端 / 智能体] -->|HTTPS + OAuth| A[Cloudflare Access\nManaged OAuth]
     A -->|已签名身份 JWT| W[Worker /mcp]
     W -->|VPC Network 原始 TCP| T[cloudflared]
     T -->|127.0.0.1:22| S[SSH Server]
@@ -24,9 +24,12 @@ flowchart LR
 
 OAuth 解决“谁可以调用工具”，SSH 密钥解决“以哪个远程用户执行命令”。Worker 校验 Access JWT，随后通过 `SSH_VPC.connect()` 建立连接，以专用 SSH 密钥登录并校验服务器主机指纹。SSH 协议本身加密命令与输出。
 
-## 已验证的范围
+## 使用场景
 
-2026-10-26，作为本项目来源的个人部署已完成 **ChatGPT 网页端 → Managed OAuth → Worker → VPC Network → SSH 主机 → `whoami`** 验证，实际返回远程登录用户、空 stderr 和退出码 `0`。公开源码保留相同的执行逻辑，并将个人配置替换成模板；仓库本身不附带可直接使用的远程电脑或凭据。
+- **AI 对话中的远程操作**：例如在 ChatGPT 网页端调用 SSH 工具，复用已有的交互入口与模型额度。[接入说明与已验证范围](docs/scenarios/chatgpt.md)。
+- **智能体的执行工具**：将同一 MCP 服务接入选定的智能体工作流，远程命令以目标 SSH 用户的权限执行。
+
+客户端需支持本项目的 Streamable HTTP 与 Managed OAuth 接入方式，兼容性通过各客户端的真实调用验收确认。
 
 Workers VPC 目前属于 Beta，接口可能变化。SSH 使用实验性的 [`@workeryard/undershell`](https://www.npmjs.com/package/@workeryard/undershell)，版本固定在 lockfile 中。
 
@@ -89,6 +92,5 @@ docs/troubleshooting.md      按错误选择排障路径
 - [Cloudflare VPC Networks：Tunnel binding 与原始 TCP](https://developers.cloudflare.com/workers-vpc/configuration/vpc-networks/)
 - [Cloudflare Tunnel：Workers VPC 要求](https://developers.cloudflare.com/workers-vpc/configuration/tunnel/)
 - [Cloudflare Access Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)
-- [OpenAI：插件身份验证](https://developers.openai.com/plugins/build/auth)
 
-参考资料用于确认平台要求；端到端验证结果来自上文所述个人部署，不能代替新环境的实际验收。
+参考资料用于确认平台要求；场景文档中的历史验证不能代替新环境、新客户端的实际验收。

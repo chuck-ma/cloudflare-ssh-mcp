@@ -19,5 +19,5 @@
     "typescript": "6.0.3",
     "wrangler": "4.151.2"
   },
-  "description": "Connect ChatGPT to your SSH hosts through Cloudflare Managed OAuth, Workers VPC and Tunnel."
+  "description": "A self-hosted SSH MCP server built on Cloudflare Workers, Managed OAuth, VPC and Tunnel."
 }

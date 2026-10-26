@@ -15,7 +15,7 @@
 | SSH 登录用户与可信 Ed25519 主机指纹 | `SSH_USER`、`SSH_HOST_KEY`，后者格式为 `SHA256:...` |
 | 专用 SSH 密钥状态与现有管理途径 | 仅需知道存放位置、公钥指纹与是否已安装，不把私钥放进上下文 |
 | MCP Access 应用及 Audience | `ACCESS_AUD`；尚未创建时在第 6 阶段取得 |
-| 客户端与回调地址 | 本项目目标入口为 ChatGPT；回调以实际连接页面为准 |
+| 客户端、OAuth 能力与回调地址 | 使用用户指定的 MCP 客户端，核对 Streamable HTTP、Managed OAuth 接入能力与实际回调 |
 
 **成功条件：** 目标账户、主机、用户和允许修改的资源已明确；已有匹配资源可复用。缺少私网 SSH 访问条件时，先处理第 1–3 阶段，不以公网暴露替代。
 
@@ -83,7 +83,7 @@ npx wrangler deploy --dry-run --config wrangler.local.jsonc
 npx wrangler auth create ssh-mcp-vpc --scopes account:read user:read workers:write workers_scripts:write connectivity:admin
 ```
 
-直接绑定 Tunnel 需要 `Connectivity Directory Admin`。本次仅有 `workers:write` 时 deployments API 拒绝访问，加入 `workers_scripts:write` 后成功。这些是发布端权限，不交给 ChatGPT；OAuth scopes 与 API token 权限名不可直接互换。权限不足时说明具体缺项，遵循用户授权和所用工具的确认要求。
+直接绑定 Tunnel 需要 `Connectivity Directory Admin`。本次仅有 `workers:write` 时 deployments API 拒绝访问，加入 `workers_scripts:write` 后成功。这些是发布端权限，不交给 MCP 客户端；OAuth scopes 与 API token 权限名不可直接互换。权限不足时说明具体缺项，遵循用户授权和所用工具的确认要求。
 
 ```sh
 npm run deploy -- --profile ssh-mcp-vpc
@@ -97,18 +97,13 @@ profile 参数使用实际选定名称。首次发布可先保留空 AUD 以取�
 
 读取覆盖 MCP 主机名的 Access 应用，匹配时复用；缺失时在授权范围内创建 MCP server 应用。策略仅允许 `OWNER_EMAIL` 对应身份，保护实际使用的生产/预览入口。保留不属于本项目的应用与策略。
 
-开启 Managed OAuth，配置所需动态客户端注册和 ChatGPT 回调 allowlist。以客户端显示的准确 URI 为准；本次曾使用以下形式，并非要求每个环境同时添加：
+开启 Managed OAuth，按所选客户端需要配置动态客户端注册和回调 allowlist。回调必须来自该客户端实际连接页面或官方配置，不将某个客户端的地址写成通用默认值；参考 [场景索引](../README.md#使用场景)选择相关接入说明。仅在客户端确实需要时允许 localhost/loopback 回调。
 
-```text
-https://chatgpt.com/connector_platform_oauth_redirect
-https://chatgpt.com/connector/oauth/*
-```
-
-网页端流程无需任意 localhost/loopback 客户端许可。grant session 和 access token 生命周期按当前用户选择配置；15 分钟 access token、1 个月 grant 是本次部署实例，不是实现要求。grant 有效时可刷新 token，到期或撤销后需重新登录，与 SSH 密钥周期独立。
+grant session 和 access token 生命周期按当前用户选择配置；15 分钟 access token、1 个月 grant 是本次部署实例，不是实现要求。grant 有效时可刷新 token，到期或撤销后需重新登录，与 SSH 密钥周期独立。
 
 将实际应用 Audience 填入 `ACCESS_AUD`。客户端提交 OAuth token，Cloudflare 向 Worker 注入签名的 `Cf-Access-Jwt-Assertion`；Worker 校验这份断言。OAuth discovery、注册和换 token 由边缘提供，Worker 只实现 `/mcp`。
 
-**成功条件：** 读取已保存的应用确认主机、策略、Managed OAuth、回调与 AUD 一致，本地配置指向该应用。界面或客户端规则有变化时查 [Cloudflare Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/) 与 [OpenAI 身份验证文档](https://developers.openai.com/plugins/build/auth)，不要盲目扩大回调匹配范围。
+**成功条件：** 读取已保存的应用确认主机、策略、Managed OAuth、回调与 AUD 一致，本地配置指向该应用。界面或客户端规则有变化时查 [Cloudflare Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/) 及所选客户端的官方身份验证文档，不要盲目扩大回调匹配范围。
 
 ## 7. Secret 与最终发布
 
@@ -125,9 +120,11 @@ npm run deploy -- --profile ssh-mcp-vpc
 
 ## 8. 从指定客户端验收
 
-复用已有且匹配的 ChatGPT 自定义 MCP 应用。缺失时在账户有权限的创建入口配置名称（如 Cloudflare SSH）、`https://<自己的 Worker 主机名>/mcp` 与 OAuth；完成本人登录并确认发现 `ssh_exec`。
+使用用户指定的 MCP 客户端，复用已有且匹配的服务连接。缺失时配置 `https://<自己的 Worker 主机名>/mcp` 与 OAuth，按客户端支持的注册方式完成本人登录，并确认发现 `ssh_exec`。
 
-从 ChatGPT 网页端调用：
+若请求携带 `Origin`，还需核对 `src/index.ts` 的 `allowedOriginHostnames` 是否允许该客户端。当前源码保留了已验证场景的显式白名单，不代表所有浏览器来源都可直接接入；需要修改时在代码授权范围内增加准确来源并部署，不使用通配放开方式。场景特定设置只在对应场景文档中维护。
+
+从选定客户端调用：
 
 ```json
 {"command":"whoami","timeout_seconds":15}

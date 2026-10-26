@@ -1,15 +1,16 @@
 ---
 name: cloudflare-ssh-mcp
-description: 配置、部署和排障本仓库的 ChatGPT SSH MCP 服务，使用 Cloudflare Managed OAuth、Workers VPC 和 Tunnel。适用于接入 SSH 主机或继续未完成的部署；普通远程命令执行不需要本部署流程。
+description: 配置、部署和排障本仓库的 SSH MCP 服务，使用 Cloudflare Managed OAuth、Workers VPC 和 Tunnel。适用于接入 SSH 主机或继续未完成的部署；普通远程命令执行不需要本部署流程。
 ---
 
 # Cloudflare SSH MCP
 
-交付可由 ChatGPT 经 OAuth 调用的 `ssh_exec`，并从用户指定的客户端入口验证到目标 SSH 主机的完整链路。项目使用标准 SSH，不按操作系统选择另一套架构。
+交付可由 MCP 客户端经 OAuth 调用的 `ssh_exec`，并从用户指定的客户端入口验证到目标 SSH 主机的完整链路。项目使用标准 SSH，不按操作系统选择另一套架构。
 
 ## 按任务加载
 
 - 新部署或继续部署：读 [部署流程](docs/setup.md)，先核对输入与当前状态，从第一个未完成阶段继续。
+- 客户端接入：先确认用户选择的客户端及其 OAuth 能力；场景资料按需读取，[场景索引](README.md#使用场景)不构成通用部署前提。
 - 已有连接故障：读 [排障表](docs/troubleshooting.md)，从实际错误定位；仅在配置需要修正时读部署流程的相关阶段。
 - 修改 Worker：先读对应源码。`src/index.ts` 定义 MCP 契约，`src/auth.ts` 校验 Access JWT，`src/ssh.ts` 处理私网连接和 SSH。用户未要求改代码时，优先完成配置。
 - 项目动机、架构和工具参数见 [README](README.md)；不必为部署加载全部源码或全部排障条目。
@@ -31,6 +32,6 @@ description: 配置、部署和排障本仓库的 ChatGPT SSH MCP 服务，使�
 
 ## 完成标准
 
-部署成功与静态检查属于诊断证据。只有用户指定的客户端通过 OAuth 调用本项目 `ssh_exec`，执行 `whoami` 并返回预期账户、`exitStatus: 0`，才能报告端到端验收通过。若目标是 ChatGPT 网页端，其他 MCP 客户端或直连 SSH 的成功不能替代网页端验收。
+部署成功与静态检查属于诊断证据。只有用户指定的客户端通过 OAuth 调用本项目 `ssh_exec`，执行 `whoami` 并返回预期账户、`exitStatus: 0`，才能报告端到端验收通过。其他客户端或直连 SSH 的成功不能替代用户指定入口的验收。
 
 交付时分别报告：Worker/MCP 地址、复用或创建的资源标识、部署版本（如有）、实际入口及命令结果、未完成事项。对受阻状态使用“未验收”或“验收失败”，不要把历史部署的成功当作当前环境的结果。

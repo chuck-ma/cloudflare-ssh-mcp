@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+wrangler.local.jsonc
+.dev.vars*
+.env*
+*.pem
+*.key
+id_ed25519*
+.DS_Store

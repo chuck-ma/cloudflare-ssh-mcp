@@ -21,7 +21,7 @@
 
 ## 1. 核对 SSH 服务
 
-确认目标服务已启动、允许指定用户使用 Ed25519 公钥登录、提供 `ssh-ed25519` 主机密钥，监听范围包含 connector 所在网络命名空间的 `127.0.0.1:22`。记录该用户默认 shell，后续命令使用相应语法。
+确认目标服务已启动、允许指定用户使用 Ed25519 公钥登录、提供 `ssh-ed25519` 主机密钥，监听范围包含 connector 所在网络命名空间的 `127.0.0.1:SSH_PORT`（默认 22）。记录该用户默认 shell，后续命令使用相应语法。
 
 通过已有可信管理途径核对主机公钥指纹，例如：
 
@@ -32,6 +32,18 @@ ssh-keygen -lf /path/to/ssh_host_ed25519_key.pub -E sha256
 路径按目标服务实际配置替换。修改或安装 SSH 服务仅限用户授权范围，保留既有管理入口。本次来源部署只监听回环地址；这是部署选择，不应机械覆盖其他主机的监听配置。
 
 **成功条件：** 目标监听与算法满足当前源码约束，`SSH_USER` 和 `SSH_HOST_KEY` 已确定。指纹不符或来源不可信时，停止 SSH 验证并查明原因。
+
+macOS 可使用 `scripts/mac-ssh.sh` 管理独立的用户级 SSH 服务，默认仅监听 `127.0.0.1:22222`。它与系统 Remote Login 独立，不修改日常 `.ssh/authorized_keys`，也不安装 LaunchAgent。Worker 对应设置 `SSH_PORT="22222"`（可选，省略时为 22；允许 1–65535 的十进制整数）。
+
+- `bash scripts/mac-ssh.sh status`：只读查看状态，不生成密钥。
+- `bash scripts/mac-ssh.sh start`：获授权后显式运行；首次生成专用主机与客户端密钥、公钥文件和配置，然后启动服务。
+- `bash scripts/mac-ssh.sh stop`：停止脚本管理的服务，保留专用文件。
+
+私有目录为 `~/.local/share/cloudflare-ssh-mcp`，权限 700；文件权限 600。只上传其中的 `id_ed25519` 到 Worker Secret。通过 `ssh-keygen -lf ~/.local/share/cloudflare-ssh-mcp/host_ed25519.pub -E sha256` 核对主机指纹。`sshd` 允许以启动它的用户执行命令，运行 `start` 前须确认该账户权限；不需要 sudo。脚本关闭密码认证与 SSH 转发，但账户本身的文件和命令权限仍然适用。
+
+需要登录后持续运行时，`scripts/mac-services.py` 管理本项目 SSH 和 Tunnel 两个用户级 LaunchAgent。先将官方 `cloudflared` 放在私有目录的 `bin/cloudflared`，将本项目 Tunnel token 放在权限 600 的 `tunnel-token`；`prepare` 只生成预览，`enable` 验证并加载，`status` 查询，`disable` 停用并卸载，保留私有文件。启用 LaunchAgent 后用 `disable` 停止，单独停止 SSH 进程会被 KeepAlive 拉起。SSH LaunchAgent 直接启动系统 `/usr/sbin/sshd`，使 macOS 隐私授权归属该服务，而不是通用 Bash。
+
+macOS 的文稿、桌面等目录另受隐私权限保护；`whoami` 成功不代表能读取这些目录。实际读取报 `Operation not permitted` 时，核对系统隐私日志的责任进程。在用户明确允许该文件访问范围后，由系统设置的“隐私与安全 → 完全磁盘访问权限”添加并开启 `/usr/sbin/sshd`；系统解锁由用户本人完成。授权后从 MCP 客户端复测目标目录读写，不能仅凭开关状态判定。该授权不改变 SSH 的监听地址、用户和密钥认证。Mac 退出登录、休眠或离线时连接不可用。
 
 ## 2. 核对或配置专用密钥
 

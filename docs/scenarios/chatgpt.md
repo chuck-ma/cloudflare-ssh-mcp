@@ -12,12 +12,13 @@
 - MCP URL：`https://<自己的 Worker 主机名>/mcp`。
 - 认证：OAuth，通过 Managed OAuth discovery 和客户端动态注册连接。
 
-在 Access 的 Managed OAuth allowlist 中使用 ChatGPT 实际显示的回调。本次部署使用过以下形式，并非每个连接都需要同时添加：
+在 Access 的 Managed OAuth allowlist 中使用 ChatGPT 连接页面实际显示的精确回调。不同 OAuth 服务可能使用不同回调；例如页面给出带 callback ID 的地址时，替换下面的占位值，不添加通配符：
 
 ```text
-https://chatgpt.com/connector_platform_oauth_redirect
-https://chatgpt.com/connector/oauth/*
+https://chatgpt.com/connector/oauth/<连接页面显示的callback_id>
 ```
+
+同一主机接入多个 ChatGPT 账号时，复用匹配的 Worker、Tunnel 和 Access 应用。先保留并核对已有回调；新连接生成不同回调时才追加，生成相同回调则复用。ChatGPT 账号与 Access 登录邮箱分别核对，不因新增客户端账号扩大 Access 邮箱策略。每个账号分别完成 OAuth 和网页实际调用验收。
 
 当前 `src/index.ts` 的 `allowedOriginHostnames` 显式包含 `chatgpt.com`，用于携带该 Origin 的请求。其他客户端是否需要不同来源，应按其请求与接入方式检查，不能从本场景的成功推导所有客户端已兼容。
 

@@ -17,6 +17,7 @@
     "ACCESS_TEAM_DOMAIN": "YOUR-TEAM.cloudflareaccess.com",
     "OWNER_EMAIL": "",
     "SSH_USER": "YOUR_SSH_USER",
+    "SSH_PORT": "22",
     "SSH_HOST_KEY": "SHA256:REPLACE_WITH_VERIFIED_HOST_FINGERPRINT",
     "ACCESS_AUD": ""
   },

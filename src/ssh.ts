@@ -9,14 +9,24 @@ interface Socket {
 export interface SshConfig {
   SSH_VPC: { connect(address: { hostname: string; port: number }): Socket | Promise<Socket> };
   SSH_USER: string;
+  SSH_PORT?: string;
   SSH_HOST_KEY: string;
   SSH_PRIVATE_KEY: string;
 }
 
+export function parseSshPort(value?: string): number {
+  if (value === undefined) return 22;
+  if (!/^[0-9]+$/.test(value) || Number(value) < 1 || Number(value) > 65535) {
+    throw new Error('SSH_PORT must be an integer from 1 to 65535');
+  }
+  return Number(value);
+}
+
 async function openPrivateSocket(env: SshConfig): Promise<Socket> {
+  const port = parseSshPort(env.SSH_PORT);
   let expired = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const pending = Promise.resolve(env.SSH_VPC.connect({ hostname: '127.0.0.1', port: 22 })).then(async socket => {
+  const pending = Promise.resolve(env.SSH_VPC.connect({ hostname: '127.0.0.1', port })).then(async socket => {
     if (expired) {
       await socket.close().catch(() => {});
       throw new Error('Private SSH connection timed out');

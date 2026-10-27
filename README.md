@@ -19,7 +19,7 @@ flowchart LR
     C[MCP 客户端 / 智能体] -->|HTTPS + OAuth| A[Cloudflare Access\nManaged OAuth]
     A -->|已签名身份 JWT| W[Worker /mcp]
     W -->|VPC Network 原始 TCP| T[cloudflared]
-    T -->|127.0.0.1:22| S[SSH Server]
+    T -->|127.0.0.1:SSH_PORT| S[SSH Server]
 ```
 
 OAuth 解决“谁可以调用工具”，SSH 密钥解决“以哪个远程用户执行命令”。Worker 校验 Access JWT，随后通过 `SSH_VPC.connect()` 建立连接，以专用 SSH 密钥登录并校验服务器主机指纹。SSH 协议本身加密命令与输出。
